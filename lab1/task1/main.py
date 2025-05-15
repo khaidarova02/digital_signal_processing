@@ -9,43 +9,31 @@ T = 1    # Шаг дискретизации (с)
 u_R = 0.3   # Угловая скорость правого колеса (рад/с) np.random.uniform(0.5, 1.5)
 u_L = 0.7   # Угловая скорость левого колеса (рад/с) np.random.uniform(0.5, 1.5)
 
-# Начальное состояние
-x = 0.0  # Положение по X
-y = 0.0  # Положение по Y
-r = 0.0  # Ориентация (бисексуальная, гомосексуальная, гетеросексуальная)
+# Линейные скорости колес
+s_L = W_L * u_L
+s_R = W_R * u_R
+
+# Скорость передвижения и вращения
+s_t = (s_R + s_L) / 2
+s_r = (s_R - s_L) / (2 * B)
 
 # Параметры при измерении положения
 mu = 0
 sigma = 0.2
 
-# Списки для хранения данных
-trajectory = []
-measurements = []
 
-# Генерация траектории движения
-for _ in range(120):
-    # Линейные скорости колес
-    s_L = W_L * u_L
-    s_R = W_R * u_R
-
-    # Скорость передвижения и вращения
-    s_t = (s_R + s_L) / 2
-    s_r = (s_R - s_L) / (2 * B)
-
-    # Обновление состояния робота
-    x_new = x + T * s_t * np.cos(r) - (1 / 2) * T ** 2 * s_t * s_r * np.sin(r)
-    y_new = y + T * s_t * np.sin(r) + (1 / 2) * T ** 2 * s_t * s_r * np.cos(r)
-    r_new = r + T * s_r
-    trajectory.append(np.array([x_new, y_new, r_new]))
-
-    # Добавление измерений с шумом
-    w_x = np.random.normal(mu, sigma)
-    w_y = np.random.normal(mu, sigma)
-    w_r = np.random.normal(mu, sigma)
-    measurements.append([x_new + w_x, y_new + w_y, r_new + w_r])
-
-    # Обновление состояния для следующей итерации
-    x, y, r = x_new, y_new, r_new
+def draw(trajectory, measurements, estimated_trajectory):
+    plt.figure(figsize=(10, 8))
+    plt.plot(trajectory[:, 0], trajectory[:, 1], label='Истинная траектория', color='blue')
+    plt.plot(measurements[:, 0], measurements[:, 1], label='Измеренные позиции', color='red')
+    plt.plot(estimated_trajectory[:, 0], estimated_trajectory[:, 1], label='Оцененная траектория EKF', color='green')
+    plt.xlabel('X позиция (м)')
+    plt.ylabel('Y позиция (м)')
+    plt.title('Отслеживание положения и ориентации мобильного робота')
+    plt.legend()
+    plt.axis('equal')
+    plt.grid()
+    plt.show()
 
 
 # Функция EKF
@@ -83,21 +71,42 @@ def ekf(measurements):
     return np.array(estimated_states)
 
 
-# Запуск EKF
-estimated_trajectory = ekf(measurements)
+def main():
+    # Списки для хранения данных
+    trajectory = []
+    measurements = []
 
-# Визуализация результатов
-trajectory = np.array(trajectory)
-measurements = np.array(measurements)
+    # Начальное состояние
+    x = 0.0  # Положение по X
+    y = 0.0  # Положение по Y
+    r = 0.0  # Ориентация (бисексуальная, гомосексуальная, гетеросексуальная)
 
-plt.figure(figsize=(10, 8))
-plt.plot(trajectory[:, 0], trajectory[:, 1], label='Истинная траектория', color='blue')
-plt.plot(measurements[:, 0], measurements[:, 1], label='Измеренные позиции', color='red')
-plt.plot(estimated_trajectory[:, 0], estimated_trajectory[:, 1], label='Оцененная траектория EKF', color='green')
-plt.xlabel('X позиция (м)')
-plt.ylabel('Y позиция (м)')
-plt.title('Отслеживание положения и ориентации мобильного робота')
-plt.legend()
-plt.axis('equal')
-plt.grid()
-plt.show()
+    # Генерация траектории движения
+    for _ in range(120):
+        # Обновление состояния робота
+        x_new = x + T * s_t * np.cos(r) - (1 / 2) * T ** 2 * s_t * s_r * np.sin(r)
+        y_new = y + T * s_t * np.sin(r) + (1 / 2) * T ** 2 * s_t * s_r * np.cos(r)
+        r_new = r + T * s_r
+        trajectory.append(np.array([x_new, y_new, r_new]))
+
+        # Добавление измерений с шумом
+        w_x = np.random.normal(mu, sigma)
+        w_y = np.random.normal(mu, sigma)
+        w_r = np.random.normal(mu, sigma)
+        measurements.append([x_new + w_x, y_new + w_y, r_new + w_r])
+
+        # Обновление состояния для следующей итерации
+        x, y, r = x_new, y_new, r_new
+
+    # Запуск EKF
+    estimated_trajectory = ekf(measurements)
+
+    # Визуализация результатов
+    trajectory = np.array(trajectory)
+    measurements = np.array(measurements)
+
+    draw(trajectory, measurements, estimated_trajectory)
+
+
+if __name__ == "__main__":
+    main()
