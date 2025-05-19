@@ -1,173 +1,203 @@
 import numpy as np
 import matplotlib.pyplot as plt
+from scipy.linalg import sqrtm
+import math
+
+mu = 0
+sigma = 0.2
 
 
-class EKF:
-    def __init__(self, initial_state, initial_cov, Q, R):
-        self.state = initial_state
-        self.P = initial_cov
-        self.Q = Q
-        self.R = R
-
-    def predict(self, delta_r1, delta_t, delta_r2):
-        x, y, theta = self.state
-        # Обновление состояния
-        new_theta = theta + delta_r1 + delta_r2
-        new_x = x + delta_t * np.cos(theta + delta_r1)
-        new_y = y + delta_t * np.sin(theta + delta_r1)
-        self.state = np.array([new_x, new_y, new_theta])
-
-        # Якобиан F
-        F = np.eye(3)
-        F[0, 2] = -delta_t * np.sin(theta + delta_r1)
-        F[1, 2] = delta_t * np.cos(theta + delta_r1)
-
-        # Обновление ковариации
-        self.P = F @ self.P @ F.T + self.Q
-        self.state[2] = (self.state[2] + np.pi) % (2 * np.pi) - np.pi  # Нормализация угла
-
-    def update(self, landmarks, measurements):
-        for landmark_id, z_meas in measurements:
-            lx, ly = landmarks[landmark_id]
-            x, y, theta = self.state
-
-            # Ожидаемое измерение
-            z_pred = np.hypot(x - lx, y - ly)
-
-            # Якобиан H
-            H = np.zeros((1, 3))
-            dx = x - lx
-            dy = y - ly
-            H[0, 0] = dx / z_pred
-            H[0, 1] = dy / z_pred
-
-            # Обновление Калмана
-            S = H @ self.P @ H.T + self.R
-            K = self.P @ H.T / S
-            self.state += K.flatten() * (z_meas - z_pred)
-            self.P = (np.eye(3) - K @ H) @ self.P
-
-
-class UKF:
-    def __init__(self, initial_state, initial_cov, Q, R, alpha=1e-3, beta=2, kappa=0):
-        self.state = initial_state
-        self.P = initial_cov
-        self.Q = Q
-        self.R = R
-        self.n = 3
-        self.lambda_ = alpha ** 2 * (self.n + kappa) - self.n
-        self.weights = self._compute_weights(alpha, beta)
-
-    def _compute_weights(self, alpha, beta):
-        weights = np.zeros(2 * self.n + 1)
-        weights[0] = self.lambda_ / (self.n + self.lambda_)
-        weights[1:] = 1 / (2 * (self.n + self.lambda_))
-        return weights
-
-    def _compute_sigma_points(self):
-        sigma_points = np.zeros((2 * self.n + 1, self.n))
-        sigma_points[0] = self.state
-        L = np.linalg.cholesky((self.n + self.lambda_) * self.P)
-        for i in range(self.n):
-            sigma_points[i + 1] = self.state + L[i]
-            sigma_points[self.n + i + 1] = self.state - L[i]
-        return sigma_points
-
-    def predict(self, delta_r1, delta_t, delta_r2):
-        sigma_points = self._compute_sigma_points()
-        # Прогноз для каждой сигма-точки
-        for i in range(2 * self.n + 1):
-            x, y, theta = sigma_points[i]
-            new_theta = theta + delta_r1 + delta_r2
-            new_x = x + delta_t * np.cos(theta + delta_r1)
-            new_y = y + delta_t * np.sin(theta + delta_r1)
-            sigma_points[i] = [new_x, new_y, new_theta]
-
-        # Обновление состояния и ковариации
-        self.state = np.dot(self.weights, sigma_points)
-        delta = sigma_points - self.state
-        self.P = (delta.T * self.weights) @ delta + self.Q
-        self.state[2] = (self.state[2] + np.pi) % (2 * np.pi) - np.pi
-
-    def update(self, landmarks, measurements):
-        for landmark_id, z_meas in measurements:
-            sigma_points = self._compute_sigma_points()
-            lx, ly = landmarks[landmark_id]
-
-            # Преобразование сигма-точек в измерения
-            z_sigma = np.array([np.hypot(pt[0] - lx, pt[1] - ly) for pt in sigma_points])
-
-            # Вычисление статистик
-            z_mean = np.dot(self.weights, z_sigma)
-            z_diff = z_sigma - z_mean
-            x_diff = sigma_points - self.state
-            Pzz = (z_diff.T * self.weights) @ z_diff + self.R
-            Pxz = (x_diff.T * self.weights) @ z_diff
-
-            # Обновление Калмана
-            K = Pxz / Pzz
-            self.state += K * (z_meas - z_mean)
-            self.P -= K * Pzz * K.T
-
-
-def load_data(landmarks_path, sensor_path):
+def load_data():
     landmarks = {}
-    with open(landmarks_path) as f:
+    with open('../data_files/landmarks.dat') as f:
         for line in f:
-            id_, x, y = map(float, line.strip().split())
+            id_, x, y = map(int, line.strip().split())
             landmarks[int(id_)] = (x, y)
 
-    sensor_data = []
-    with open(sensor_path) as f:
+    sensor_data = {}
+    current_odometry = None
+    with open('../data_files/sensor_data_ekf.dat') as f:
         for line in f:
-            parts = list(map(float, line.strip().split()))
-            t = parts[0]
-            controls = parts[1:4]
-            measurements = [(int(parts[i]), parts[i + 1])
-                            for i in range(4, len(parts), 2)]
-            sensor_data.append((controls, measurements))
+            parts = list(line.strip().split())
+            if parts[0] == "ODOMETRY":
+                current_odometry = tuple(map(float, parts[1:]))
+                if current_odometry not in sensor_data:
+                    sensor_data[current_odometry] = []
+
+            elif parts[0] == "SENSOR":
+                if current_odometry is not None:
+                    # Обрабатываем данные сенсора
+                    sensor_values = (int(parts[1]), list(map(float, parts[2:])))
+                    sensor_data[current_odometry].append(sensor_values)
+
     return landmarks, sensor_data
 
 
-# Инициализация
-landmarks, sensor_data = load_data('data_files/landmarks.dat', 'data_files/sensor_data_ekf.dat')
-initial_state = np.array([0.0, 0.0, 0.0])
-initial_cov = np.eye(3) * 1e-3
-Q = np.eye(3) * 0.2
-R = 0.2
+def draw(ekf_states, ukf_states, landmarks):
+    plt.figure(figsize=(12, 8))
+    landmark_coords = np.array(list(landmarks.values()))
+    plt.scatter(landmark_coords[:, 0], landmark_coords[:, 1],
+                marker='*', c='red', s=100, label='Landmarks')
+    plt.plot(ekf_states[:, 0], ekf_states[:, 1], label='EKF')
+    plt.plot(ukf_states[:, 0], ukf_states[:, 1], '--', label='UKF')
+    plt.legend()
+    plt.title('Сравнение траекторий EKF и UKF')
+    plt.xlabel('X координата')
+    plt.ylabel('Y координата')
+    plt.grid(True)
+    plt.show()
 
-# Создание фильтров
-ekf = EKF(initial_state.copy(), initial_cov.copy(), Q, R)
-ukf = UKF(initial_state.copy(), initial_cov.copy(), Q, R)
 
-# Обработка данных
-ekf_states, ukf_states = [], []
-for controls, measurements in sensor_data:
-    delta_r1, delta_t, delta_r2 = controls
-
+def ekf(state, P, Q, controls, landmarks, measurements):
     # Предсказание
-    ekf.predict(delta_r1, delta_t, delta_r2)
-    ukf.predict(delta_r1, delta_t, delta_r2)
+    dr1, dt, dr2 = controls
+    x, y, theta = state
+
+    e_xt = np.random.normal(mu, sigma)
+    e_yt = np.random.normal(mu, sigma)
+    e_tt = np.random.normal(mu, sigma)
+
+    new_x = x + dt * np.cos(theta + dr1) + e_xt
+    new_y = y + dt * np.sin(theta + dr1) + e_yt
+    new_theta = (theta + dr1 + dr2) % (2 * np.pi) + e_tt
+
+    state = np.array([new_x, new_y, new_theta])
+
+    F = np.array([
+        [1, 0, -dt * np.sin(theta + dr1)],
+        [0, 1, dt * np.cos(theta + dr1)],
+        [0, 0, 1]
+    ], dtype=np.float64)  # матрица Якоби модели движения
 
     # Коррекция
     if measurements:
-        ekf.update(landmarks, measurements)
-        ukf.update(landmarks, measurements)
+        num_meas = len(measurements)
+        z_pred = np.zeros(num_meas)  # ожидаемые измерения
+        z_meas = np.zeros(num_meas)  # реальные измерения
+        H = np.zeros((num_meas, 3))  # матрица Якоби измерений
 
-    ekf_states.append(ekf.state.copy())
-    ukf_states.append(ukf.state.copy())
+        for i, (landmark_id, z) in enumerate(measurements):
+            lx, ly = landmarks[landmark_id]
+            dx = state[0] - lx
+            dy = state[1] - ly
 
-# Визуализация
-ekf_states = np.array(ekf_states)
-ukf_states = np.array(ukf_states)
+            z_pred[i] = np.sqrt(dx**2 + dy**2)              # ожидаемое расстояние
+            z_meas[i] = z[0]                                # реальное расстояние
+            H[i, :] = [dx / z_pred[i], dy / z_pred[i], 0]   # матрица Якоби модели измерения
 
-plt.figure(figsize=(12, 8))
-plt.plot(ekf_states[:, 0], ekf_states[:, 1], label='EKF')
-plt.plot(ukf_states[:, 0], ukf_states[:, 1], '--', label='UKF')
-plt.scatter(*zip(*landmarks.values()), marker='*', c='red', label='Landmarks')
-plt.legend()
-plt.title('Сравнение траекторий EKF и UKF')
-plt.xlabel('X координата')
-plt.ylabel('Y координата')
-plt.grid(True)
-plt.show()
+        P = F @ P @ F.T + Q  # обновление ковариционной матрицы
+
+        R = np.eye(num_meas) * sigma
+        S = H @ P @ H.T + R
+        K = P @ H.T @ np.linalg.inv(S)  # калмановский коэффициент усиления
+
+        state += (K @ (z_meas - z_pred))
+        P -= K @ S @ K.T
+
+    return state, P
+
+
+def ukf_compute_sigma_points(state, P, n):
+    sigma_points = np.zeros((2 * n + 1, n))
+    sigma_points[0] = state     # центральная точка
+    C = np.linalg.cholesky(P)   # разложение Холецкого
+
+    for i in range(n):
+        sigma_points[i + 1] = state + C[i]          # положительные отклонения
+        sigma_points[n + i + 1] = state - C[i]      # отрицательное отклонение
+    return sigma_points
+
+
+def ukf(state, P, Q, controls, landmarks, measurements):
+    n = 3
+
+    # Предсказание
+    dr1, dt, dr2 = controls
+
+    # Инициализация весов
+    lambd = 1
+    W = [1 / 2 / (n + lambd) for _ in range(2 * n + 1)]
+    W[0] = lambd / (n + lambd)
+    sigma_points = ukf_compute_sigma_points(state, P, n)
+
+    # Прогноз для каждой сигма-точки с шумами
+    for i in range(2 * n + 1):
+        x, y, theta = sigma_points[i]
+        e_xt = np.random.normal(mu, sigma)
+        e_yt = np.random.normal(mu, sigma)
+        e_tt = np.random.normal(mu, sigma)
+
+        sigma_points[i] = [
+            x + dt * np.cos(theta + dr1) + e_xt,
+            y + dt * np.sin(theta + dr1) + e_yt,
+            theta + dr1 + dr2 + e_tt
+        ]
+
+    # Обновление состояния и ковариации
+    state = np.dot(W, sigma_points)         # взвешенное среднее сигма-точек
+    delta = sigma_points - state
+    P = (delta.T * W) @ delta + Q
+    state[2] = (state[2] + np.pi) % (2 * np.pi) - np.pi
+
+    # Коррекция
+    if measurements:
+        sigma_points = ukf_compute_sigma_points(state, P, n)
+        num_meas = len(measurements)
+
+        # Преобразование сигма-точек в измерения
+        z_sigma = np.zeros((2 * n + 1, num_meas))
+        z_meas = np.zeros(num_meas)
+
+        for i, (landmark_id, z) in enumerate(measurements):
+            lx, ly = landmarks[landmark_id]
+            z_meas[i] = z[0]
+            for j in range(2 * n + 1):
+                dx = sigma_points[j, 0] - lx
+                dy = sigma_points[j, 1] - ly
+                z_sigma[j, i] = np.hypot(dx, dy)
+
+        # Обновление UKF
+        z_mean = np.dot(W, z_sigma)
+        z_diff = z_sigma - z_mean
+        x_diff = sigma_points - state
+
+        R = np.eye(num_meas) * sigma
+        S = (z_diff.T * W) @ z_diff + R
+        C = (x_diff.T * W) @ z_diff
+
+        K = C @ np.linalg.inv(S)
+        state += (K @ (z_meas - z_mean))
+        P -= K @ S @ K.T
+
+    return state, P
+
+
+def main():
+    # Инициализация
+    landmarks, sensor_data = load_data()
+
+    m = np.array([0.0, 0.0, 0.0])  # предсказания
+    Q = np.eye(3) * sigma          # ковариационная матрица процесса
+    P = np.eye(3) * 0.01
+
+    # Обработка данных
+    ekf_m, ukf_m = m.copy(), m.copy()
+    ekf_P, ukf_P = P.copy(), P.copy()
+
+    ekf_states, ukf_states = [], []
+    for controls, measurements in sensor_data.items():
+        ekf_m, ekf_P = ekf(ekf_m, ekf_P, Q, controls, landmarks, measurements)
+        ukf_m, ukf_P = ukf(ukf_m, ukf_P, Q, controls, landmarks, measurements)
+
+        ekf_states.append(ekf_m.copy())
+        ukf_states.append(ukf_m.copy())
+
+    # Визуализация
+    ekf_states = np.array(ekf_states)
+    ukf_states = np.array(ukf_states)
+
+    draw(ekf_states, ukf_states, landmarks)
+
+
+if __name__ == "__main__":
+    main()

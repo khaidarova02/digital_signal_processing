@@ -40,7 +40,7 @@ def draw(trajectory, measurements, estimated_trajectory):
 def ekf(measurements):
     # Инициализация состояния и ковариации
     m = np.matrix([0, 0, 0]).T  # [x, y, theta]
-    R = np.eye(3) + sigma  # Матрица ковариации шума
+    R = np.eye(3) + sigma       # Матрица ковариации шума
     P = np.eye(3)
 
     estimated_states = [m]
@@ -56,15 +56,15 @@ def ekf(measurements):
         H = np.eye(3)  # Матрица измерений (из условия задачи)
         Q = np.zeros(3)  # Ковариационная матрица процесса
 
-        P = F * P * F.T + Q  # Обновление ковариации предсказания - шум процесса
+        P = F @ P @ F.T + Q  # Обновление ковариации предсказания - шум процесса
 
         # Коррекция
-        S = H * P * H.T + R  # Ковариация измерений
-        K = P * H.T * np.linalg.inv(S)  # Калмановский коэффициент
+        S = H @ P @ H.T + R  # Ковариация измерений
+        K = P @ H.T @ np.linalg.inv(S)  # Калмановский коэффициент
 
         z = np.matrix(z).T
-        m += K * (z - m)
-        P -= K * S * K.T
+        m += K @ (z - m)
+        P -= K @ S @ K.T
 
         estimated_states.append(m)
 
