@@ -48,48 +48,43 @@ def draw(ekf_states, ukf_states, landmarks):
     plt.show()
 
 
-def ekf(state, P, Q, controls, landmarks, measurements):
-    # Предсказание
-    dr1, dt, dr2 = controls
+def ekf(state, P, odometry, landmarks, measurements):
+    # Прогнозирование
+    dr1, dt, dr2 = odometry
+
     x, y, theta = state
-
-    e_xt = np.random.normal(mu, sigma)
-    e_yt = np.random.normal(mu, sigma)
-    e_tt = np.random.normal(mu, sigma)
-
-    new_x = x + dt * np.cos(theta + dr1) + e_xt
-    new_y = y + dt * np.sin(theta + dr1) + e_yt
-    new_theta = (theta + dr1 + dr2) % (2 * np.pi) + e_tt
-
+    new_x = x + dt * np.cos(theta + dr1)
+    new_y = y + dt * np.sin(theta + dr1)
+    new_theta = theta + dr1 + dr2
     state = np.array([new_x, new_y, new_theta])
 
     F = np.array([
         [1, 0, -dt * np.sin(theta + dr1)],
         [0, 1, dt * np.cos(theta + dr1)],
         [0, 0, 1]
-    ], dtype=np.float64)  # матрица Якоби модели движения
+    ])                     # Матрица Якоби модели движения
+    Q = np.eye(3) * sigma  # Ковариационная матрица процесса
+    P = F @ P @ F.T + Q    # Обновление ковариации предсказания - шум процесса
 
     # Коррекция
     if measurements:
-        num_meas = len(measurements)
-        z_pred = np.zeros(num_meas)  # ожидаемые измерения
-        z_meas = np.zeros(num_meas)  # реальные измерения
-        H = np.zeros((num_meas, 3))  # матрица Якоби измерений
+        num_meas = len(measurements)  # количество сенсоров
+        z_pred = np.zeros(num_meas)   # ожидаемые измерения
+        z_meas = np.zeros(num_meas)   # реальные измерения
+        H = np.zeros((num_meas, 3))   # матрица Якоби измерений
 
         for i, (landmark_id, z) in enumerate(measurements):
-            lx, ly = landmarks[landmark_id]
+            lx, ly = landmarks[landmark_id]  # координаты сенсора
             dx = state[0] - lx
             dy = state[1] - ly
 
             z_pred[i] = np.sqrt(dx**2 + dy**2)              # ожидаемое расстояние
             z_meas[i] = z[0]                                # реальное расстояние
-            H[i, :] = [dx / z_pred[i], dy / z_pred[i], 0]   # матрица Якоби модели измерения
-
-        P = F @ P @ F.T + Q  # обновление ковариционной матрицы
+            H[i, :] = [dx / z_pred[i], dy / z_pred[i], 0]   # матрица Якоби модели измерения из подсчитанных производных
 
         R = np.eye(num_meas) * sigma
-        S = H @ P @ H.T + R
-        K = P @ H.T @ np.linalg.inv(S)  # калмановский коэффициент усиления
+        S = H @ P @ H.T + R             # Ковариация измерений
+        K = P @ H.T @ np.linalg.inv(S)  # Калмановский коэффициент
 
         state += (K @ (z_meas - z_pred))
         P -= K @ S @ K.T
@@ -108,46 +103,40 @@ def ukf_compute_sigma_points(state, P, n):
     return sigma_points
 
 
-def ukf(state, P, Q, controls, landmarks, measurements):
+def ukf(state, P, odometry, landmarks, measurements):
+    # Прогнозирование
     n = 3
+    dr1, dt, dr2 = odometry
 
-    # Предсказание
-    dr1, dt, dr2 = controls
-
-    # Инициализация весов
+    # веса
     lambd = 1
     W = [1 / 2 / (n + lambd) for _ in range(2 * n + 1)]
     W[0] = lambd / (n + lambd)
-    sigma_points = ukf_compute_sigma_points(state, P, n)
 
-    # Прогноз для каждой сигма-точки с шумами
+    # сигма-точки
+    sigma_points = ukf_compute_sigma_points(state, P, n)
     for i in range(2 * n + 1):
         x, y, theta = sigma_points[i]
-        e_xt = np.random.normal(mu, sigma)
-        e_yt = np.random.normal(mu, sigma)
-        e_tt = np.random.normal(mu, sigma)
-
         sigma_points[i] = [
-            x + dt * np.cos(theta + dr1) + e_xt,
-            y + dt * np.sin(theta + dr1) + e_yt,
-            theta + dr1 + dr2 + e_tt
+            x + dt * np.cos(theta + dr1),
+            y + dt * np.sin(theta + dr1),
+            theta + dr1 + dr2
         ]
 
-    # Обновление состояния и ковариации
-    state = np.dot(W, sigma_points)         # взвешенное среднее сигма-точек
+    # состояние и ковариация
+    state = np.dot(W, sigma_points)  # взвешенное среднее сигма-точек
     delta = sigma_points - state
+    Q = np.eye(3) * sigma            # ковариационная матрица процесса
     P = (delta.T * W) @ delta + Q
-    state[2] = (state[2] + np.pi) % (2 * np.pi) - np.pi
 
     # Коррекция
     if measurements:
         sigma_points = ukf_compute_sigma_points(state, P, n)
         num_meas = len(measurements)
 
-        # Преобразование сигма-точек в измерения
-        z_sigma = np.zeros((2 * n + 1, num_meas))
-        z_meas = np.zeros(num_meas)
-
+        # сигма-точек -> расстояния
+        z_sigma = np.zeros((2 * n + 1, num_meas))  # расстояния между сигма-точками и сенсорами
+        z_meas = np.zeros(num_meas)                # реальные расстояния до сенсоров
         for i, (landmark_id, z) in enumerate(measurements):
             lx, ly = landmarks[landmark_id]
             z_meas[i] = z[0]
@@ -156,17 +145,17 @@ def ukf(state, P, Q, controls, landmarks, measurements):
                 dy = sigma_points[j, 1] - ly
                 z_sigma[j, i] = np.hypot(dx, dy)
 
-        # Обновление UKF
-        z_mean = np.dot(W, z_sigma)
-        z_diff = z_sigma - z_mean
-        x_diff = sigma_points - state
+        # обновление
+        z_mean = np.dot(W, z_sigma)      # взвешенное среднее по расстоянию (в лекции u)
+        z_diff = z_sigma - z_mean        # в лекции: y - u
+        x_diff = sigma_points - state    # в лекции: X - m
 
         R = np.eye(num_meas) * sigma
-        S = (z_diff.T * W) @ z_diff + R
         C = (x_diff.T * W) @ z_diff
+        S = (z_diff.T * W) @ z_diff + R  # ковариация измерений
+        K = C @ np.linalg.inv(S)         # калмановский коэффициент
 
-        K = C @ np.linalg.inv(S)
-        state += (K @ (z_meas - z_mean))
+        state += K @ (z_meas - z_mean)
         P -= K @ S @ K.T
 
     return state, P
@@ -176,18 +165,17 @@ def main():
     # Инициализация
     landmarks, sensor_data = load_data()
 
-    m = np.array([0.0, 0.0, 0.0])  # предсказания
-    Q = np.eye(3) * sigma          # ковариационная матрица процесса
-    P = np.eye(3) * 0.01
+    m = np.array([0.0, 0.0, 0.0])  # [x, y, theta] - вектор средних
+    P = np.eye(3) * 0.01           # Матрица ковариации - разброс от m
 
     # Обработка данных
     ekf_m, ukf_m = m.copy(), m.copy()
     ekf_P, ukf_P = P.copy(), P.copy()
 
     ekf_states, ukf_states = [], []
-    for controls, measurements in sensor_data.items():
-        ekf_m, ekf_P = ekf(ekf_m, ekf_P, Q, controls, landmarks, measurements)
-        ukf_m, ukf_P = ukf(ukf_m, ukf_P, Q, controls, landmarks, measurements)
+    for odometry, measurements in sensor_data.items():
+        ekf_m, ekf_P = ekf(ekf_m, ekf_P, odometry, landmarks, measurements)
+        ukf_m, ukf_P = ukf(ukf_m, ukf_P, odometry, landmarks, measurements)
 
         ekf_states.append(ekf_m.copy())
         ukf_states.append(ukf_m.copy())

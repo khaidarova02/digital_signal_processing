@@ -39,12 +39,12 @@ def draw(trajectory, measurements, estimated_trajectory):
 # Функция EKF
 def ekf(measurements):
     # Инициализация состояния и ковариации
-    m = np.matrix([0, 0, 0]).T  # [x, y, theta]
-    R = np.eye(3) + sigma       # Матрица ковариации шума
-    P = np.eye(3)
+    m = np.matrix([0, 0, 0]).T  # [x, y, r] - вектор средних
+    P = np.eye(3)               # Матрица ковариации - разброс от m
+
+    R = np.eye(3) * sigma       # Матрица ковариации шума
 
     estimated_states = [m]
-
     for z in measurements:
         # Прогнозирование
         x_pred = m[0, 0] + T * s_t * np.cos(m[2, 0]) - (1 / 2) * T ** 2 * s_t * s_r * np.sin(m[2, 0])
@@ -52,15 +52,18 @@ def ekf(measurements):
         r_pred = m[2, 0] + T * s_r
         m = np.matrix([x_pred, y_pred, r_pred]).T
 
-        F = np.eye(3)  # Матрица Якоби состояния
-        H = np.eye(3)  # Матрица измерений (из условия задачи)
-        Q = np.zeros(3)  # Ковариационная матрица процесса
-
+        F = np.array([
+            [1, 0, -T * s_t * np.sin(m[2, 0]) - 0.5 * T * T * s_t * s_r * np.cos(m[2, 0])],
+            [0, 1, T * s_t * np.cos(m[2, 0]) - 0.5 * T * T * s_t * s_r * np.sin(m[2, 0])],
+            [0, 0, 1]
+        ])                   # Матрица Якоби состояния
+        H = np.eye(3)        # Матрица измерений (из условия задачи)
+        Q = np.zeros(3)      # Ковариационная матрица процесса - их нет, поэтому нули
         P = F @ P @ F.T + Q  # Обновление ковариации предсказания - шум процесса
 
         # Коррекция
-        S = H @ P @ H.T + R  # Ковариация измерений
-        K = P @ H.T @ np.linalg.inv(S)  # Калмановский коэффициент
+        S = H @ P @ H.T + R             # Ковариация измерений
+        K = P @ H.T @ np.linalg.inv(S)  # Калмановский коэффициент - уверенность в разности полученных наблюдений и предсказанных
 
         z = np.matrix(z).T
         m += K @ (z - m)

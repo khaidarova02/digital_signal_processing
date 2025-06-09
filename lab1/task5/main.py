@@ -11,7 +11,7 @@ def load_data():
     s_records = []
     with open("../data_files/Transmitter.txt") as f:
         for line in f:
-            if line.strip():  # пропускаем пустые строки
+            if line.strip():
                 s_records.append([float(x) for x in line.split()])
     s_records = np.array(s_records, dtype=np.float64)
 
